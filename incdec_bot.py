@@ -1,17 +1,20 @@
-from telegram import MessageEntity
-from telegram import ParseMode
+from telegram import MessageEntity, ParseMode
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 from collections import defaultdict
 from rotate_word import rotate_word
 from mention_subgroup import mention_subgroup
 
-from config import ROTATE_MAX_CHARS, SUBGROUPS
+import config
 
 import os
 import sys
 import logging
 import json
 from custom_filters import IncDecFilter
+
+API_KEY_ENV = "TELEGRAM_BOT_API_KEY"
+DB_JSON = "incdec-bot-db.json"
+db = None
 
 def start(bot, update):
     update.message.reply_text('Hello World!')
@@ -22,13 +25,16 @@ which trigger this handler.
 """
 def rotate(bot, update, args):
     text_to_rotate = ' '.join(args)
-    if len(text_to_rotate) > ROTATE_MAX_CHARS:
-        update.message.reply_text("Message was too long. Please limit your " \
-                "rotations to {} characters or less.".format(ROTATE_MAX_CHARS))
+
+    if len(text_to_rotate) > config.ROTATE_MAX_CHARS:
+        warn = "Message was too long. Limit: {} chars.".format(config.ROTATE_MAX_CHARS)
+        update.message.reply_text(warn)
         return
+    
     reply_str = "```\n"
     reply_str += rotate_word(text_to_rotate)
     reply_str += "```"
+
     update.message.reply_text(reply_str, parse_mode=ParseMode.MARKDOWN)
     
 """
@@ -36,8 +42,10 @@ Replies with a message mentioning all people in a related subgroup.
 """
 def mention(bot, update, args):
     sender = update.message.from_user.username
-    reply_str = mention_subgroup(args, sender, SUBGROUPS)
-    update.message.reply_text(reply_str, parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(
+        mention_subgroup(args, sender, config.SUBGROUPS)
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 """
 Replies with the score of the user whom'st'dve triggers this handler.
@@ -45,8 +53,7 @@ Replies with the score of the user whom'st'dve triggers this handler.
 def myscore(bot, update):
     username = update.message.from_user.username
     score = db[username]
-    update.message.reply_text(
-            'Hello {}, your score is {}.'.format(username, score))
+    update.message.reply_text('Hello {}, your score is {}.'.format(username, score))
 
 """
 Replies with the score of all the mentioned targets in the message text.
@@ -56,6 +63,7 @@ def score(bot, update):
     for mention in update.message.entities:
         if mention.type != 'mention':
             continue
+        
         mention_begin = mention.offset
         mention_end = mention_begin + mention.length
 
@@ -65,6 +73,7 @@ def score(bot, update):
     reply_str = ''
     for user in mentioned_users:
         reply_str += '{} has a score of {}.\n'.format(user, db[user])
+    
     update.message.reply_text(reply_str)
 
 
@@ -84,6 +93,7 @@ def leaderboard(bot, update):
     reply_str = 'Top 5 scores:\n'
     for entry in top:
         reply_str += "{}: {}\n".format(entry[0], entry[1])
+    
     reply_str += '\nBottom 5 scores:\n'
     for entry in bottom:
         reply_str += "{}: {}\n".format(entry[0], entry[1])
@@ -116,7 +126,9 @@ def update_score(bot, update):
                 db[username] += 1
             else:
                 db[username] -= 1
+            
             mentioned_users.add(username)
+        
         elif '++' in action:
             db[username] += 1
             mentioned_users.add(username)
@@ -127,6 +139,7 @@ def update_score(bot, update):
     reply_str = ''
     for user in mentioned_users:
         reply_str += '{} now has a score of {}.\n'.format(user, db[user])
+    
     update.message.reply_text(reply_str)
 
 """
@@ -139,29 +152,36 @@ def subreddit(bot, update, args):
     
     update.message.reply_text("https://old.reddit.com/r/{}".format(args[0]))
 
-# MAIN PROGRAM
-if "TELEGRAM_BOT_API_KEY" in os.environ:
-    updater = Updater(os.environ.get("TELEGRAM_BOT_API_KEY"))
-else:
-    sys.exit("Telegram Bot API key not in TELEGRAM_BOT_API_KEY environment variable")
+if __name__ == "__main__":
+    if API_KEY_ENV not in os.environ:
+        sys.exit("Telegram Bot API key not in {} environment variable".format(API_KEY_ENV))
+    
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    custom_filter = IncDecFilter()
+    total_filter = (Filters.text & Filters.entity(MessageEntity.MENTION) & custom_filter)
 
-custom_filter = IncDecFilter()
-total_filter = (Filters.text & Filters.entity(MessageEntity.MENTION) & custom_filter)
+    handlers = [
+        (total_filter,  update_score, False),
+        ('start',       start,        False),
+        ('rotate',      rotate,       True ),
+        ('mention',     mention,      True ),
+        ('score',       score,        False),
+        ('myscore',     myscore,      False),
+        ('leaderboard', leaderboard,  False),
+        ('r',           subreddit,    True ),
+    ]
 
-updater.dispatcher.add_handler(MessageHandler(total_filter, update_score))
-updater.dispatcher.add_handler(CommandHandler('start', start))
-updater.dispatcher.add_handler(CommandHandler('rotate', rotate, pass_args=True))
-updater.dispatcher.add_handler(CommandHandler('mention', mention, pass_args=True))
-updater.dispatcher.add_handler(CommandHandler('score', score))
-updater.dispatcher.add_handler(CommandHandler('myscore', myscore))
-updater.dispatcher.add_handler(CommandHandler('leaderboard', leaderboard))
-updater.dispatcher.add_handler(CommandHandler('r', subreddit, pass_args=True))
+    updater = Updater(os.environ.get(API_KEY_ENV))
 
-dbstr = open('incdec-bot-db.json', 'r').read()
-db_raw = json.loads(dbstr)
-db = defaultdict(int, db_raw)
+    for (name, func, args) in handlers:
+        updater.dispatcher.add_handler(name, func, pass_args=args)
 
-updater.start_polling()
-updater.idle()
+    with open(DB_JSON, "r") as f:
+        db = defaultdict(int, json.loads(f.read()))
+
+    updater.start_polling()
+    updater.idle()

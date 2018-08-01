@@ -4,7 +4,7 @@ import sys
 
 def rotate_word(word):
     ret_str = ""
-    for char in word:
+    for _char in word:
         ret_str += " ".join(word) + "\n"
         word = word[1:] + word[:1]
     return ret_str

@@ -5,9 +5,15 @@ def mention_subgroup(groups, sender, group_list):
     mentions = ''
 
     for group in groups:
-        if group[:2].upper() in group_list.keys():
-            for user in group_list[group[:2].upper()]:
-                if user not in mentions and user != sender:
-                    mentions += '@' + user + ' '
+        group_name = group[:2].upper()
+
+        if group_name not in group_list.keys():
+            continue
+        
+        for user in group_list[group_name]:
+            if user in mentions or user == sender:
+                continue
+            
+            mentions += "@{} ".format(user)
 
     return mentions
